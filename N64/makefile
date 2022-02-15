@@ -1,3 +1,5 @@
+PROG_NAME = Yeti3D_Pro
+
 # Set V=1 to enable verbose Make output
 ifneq ($(V),1)
 .SILENT:
@@ -38,14 +40,15 @@ ROM_HEADER := $(LIBDRAGON_DIR)/header
 
 # Toolchain binaries
 N64_CC := $(N64_GCC_PREFIX)gcc
+N64_CXX := $(N64_GCC_PREFIX)g++
 N64_AS := $(N64_GCC_PREFIX)as
 N64_LD := $(N64_GCC_PREFIX)ld
 N64_OBJCOPY := $(N64_GCC_PREFIX)objcopy
 
 # Compiler flags
-ASFLAGS = -march=vr4300 -mtune=vr4300
+ASFLAGS = -march=vr4300 -mtune=vr4300 -Wa,--fatal-warnings
 CFLAGS += -MMD -MP # Generate dependency files during compilation
-CFLAGS += -march=vr4300 -mtune=vr4300 -std=gnu99 -G 0 -Ofast
+CFLAGS += -march=vr4300 -mtune=vr4300 -std=gnu99 -Os -ffast-math
 CFLAGS += -Wall -Wa,--fatal-warnings -fdiagnostics-color=always
 CFLAGS += -falign-functions=32 -ffunction-sections -fdata-sections
 CFLAGS += -I. -I.. -I../y3d -I"$(LIBDRAGON_DIR)/include" -I"$(N64_INCLUDE_DIR)"
@@ -57,10 +60,11 @@ CFLAGS += -DSHOW_SPLASH
 # Linker flags
 LDFLAGS += --library-path="$(LIBDRAGON_DIR)" --library-path="$(N64_LIB_DIR)"
 LDFLAGS += --library=dragon --library=c --library=m --library=dragonsys
-LDFLAGS += --script="./n64-exp.ld" --gc-sections
-LDFLAGS += -Map map.txt -nostdlib
+LDFLAGS += --script="./n64-exp.ld" -nostdlib --gc-sections --wrap __do_global_ctors
 
-PROG_NAME = Yeti3D_Pro
+#
+# Code artifacts
+#
 
 GAME_OBJS = \
 	../game/ai/boost.o \
@@ -106,6 +110,10 @@ YETI_OBJS =	\
 
 OBJS = main.o stb_image.o $(GAME_OBJS) $(YETI_OBJS)
 
+#
+# Compilation pipeline
+#
+
 all: toolchain libdragon libdragon-tools $(PROG_NAME).z64
 .PHONY: all 
 
@@ -120,13 +128,19 @@ $(PROG_NAME).z64: $(N64TOOL) $(CHKSUM64)
 		--offset 4M "$(PROG_NAME).dfs"
 	$(CHKSUM64) "$@" $(REDIRECT_STDOUT)
 
+$(PROG_NAME).dfs: $(MKDFS)
+	@echo "    [DFS] $(notdir $@)"
+	$(MKDFS) "$@" ./data/ $(REDIRECT_STDOUT)
+
 $(PROG_NAME).bin: $(PROG_NAME).elf $(TOOLCHAIN_GUARD)
 	@echo "    [BIN] $(notdir $@)"
 	$(N64_OBJCOPY) -O binary "$<" "$@"
 
+# Link using g++ for consistency with LibDragon's n64.mk
+COMMA:=,
 $(PROG_NAME).elf: $(OBJS) $(LIBDRAGON_LIBS)
 	@echo "    [LD]  $(notdir $@)"
-	$(N64_LD) -o "$@" $^ $(LDFLAGS)
+	$(N64_CXX) -o "$@" $^ -lc $(patsubst %,-Wl$(COMMA)%,$(LDFLAGS))
 
 %.o: %.c $(TOOLCHAIN_GUARD)
 	@echo "    [CC]  $<"
@@ -136,12 +150,12 @@ $(PROG_NAME).elf: $(OBJS) $(LIBDRAGON_LIBS)
 	@echo "    [AS]  $<"
 	$(N64_AS) $(ASFLAGS) -o "$@" "$<"
 
-$(PROG_NAME).dfs: $(MKDFS)
-	@echo "    [DFS] $(notdir $@)"
-	$(MKDFS) "$@" ./data/ $(REDIRECT_STDOUT)
+#
+# Housekeeping
+#
 
 clean:
-	rm -f *.o ../game/*.o ../game/ai/*.o ../y3d/*.o *.z64 *.elf *.bin *.dfs
+	rm -f $(OBJS) $(patsubst %.o,%.d,$(OBJS)) *.z64 *.elf *.bin *.dfs
 .PHONY: clean
 
 distclean: clean toolchain-clean
@@ -199,8 +213,12 @@ toolchain toolchain-clean: ;
 endif
 .PHONY: toolchain toolchain-clean
 
+#
+# Git submodules
+#
+
 ifeq ($(GITMODULES),1)
-# Update git submodules
+# Update git submodules if necessary
 gitmodules:
 	@if git submodule status | egrep -q '^[-]|^[+]' ; then \
 		echo "    [GIT] submodules"; \
