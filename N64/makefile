@@ -1,35 +1,66 @@
-ifdef $(N64_INST)
-ROOTDIR = $(N64_INST)
-else
-ROOTDIR = /opt/toolchains/n64
+# Set V=1 to enable verbose Make output
+ifneq ($(V),1)
+.SILENT:
+REDIRECT_STDOUT := >/dev/null
 endif
 
-HEADERDIR = $(ROOTDIR)/headers
-HEADER = $(HEADERDIR)/header
+# Set GITMODULES=0 to skip git submodule updates
+GITMODULES ?= 1
 
-TOOLDIR = $(ROOTDIR)/bin
-CHKSUM64 = $(TOOLDIR)/chksum64
-MKDFS = $(TOOLDIR)/mkdfs
-N64TOOL = $(TOOLDIR)/n64tool
+# Set N64_INST to skip the really long toolchain build process.
+ifeq ($(N64_INST),)
+TOOLCHAIN_DIR := ./toolchain
+# Ensure the toolchain directory exists in order to get its full path
+override N64_INST := $(shell \
+	mkdir -p "$(TOOLCHAIN_DIR)" && \
+	realpath "$(TOOLCHAIN_DIR)" \
+)
+# Use a guard to cache the toolchain in-project
+TOOLCHAIN_GUARD := $(TOOLCHAIN_DIR)/.installed
+endif
 
-LDSCRIPTSDIR = $(ROOTDIR)/ldscripts
-LINK_FLAGS = -T$(LDSCRIPTSDIR)/n64-exp.ld -Map map.txt -nostdlib
+# Toolchain directories
+N64_INCLUDE_DIR := $(N64_INST)/mips64-elf/include
+N64_LIB_DIR := $(N64_INST)/mips64-elf/lib
+N64_GCC_PREFIX := $(N64_INST)/bin/mips64-elf-
 
-LIBPATH = -L$(ROOTDIR)/mips64-elf/lib -L$(ROOTDIR)/mips64-elf/lib/gcc/mips64-elf/4.6.2 -L$(ROOTDIR)/mips64-elf/mips64-elf/lib
-INCPATH = -I./ -I../ -I../y3d/ -I$(ROOTDIR)/mips64-elf/include -I$(ROOTDIR)/mips64-elf/mips64-elf/include
-CCFLAGS = -std=gnu99 -march=vr4300 -mtune=vr4300 -G 0 -Ofast -Wall -c $(INCPATH)
-CCFLAGS += -DSTBI_NO_HDR
-CCFLAGS += -D__N64__
-CCFLAGS += -DSHOW_FPS
-CCFLAGS += -DSHOW_SPLASH
-HWCCFLAGS = -std=gnu99 -march=vr4300 -mtune=vr4300 -O1 -G 0 -Wall $(INCPATH)
-ASFLAGS = -mtune=vr4300 -march=vr4300
+# LibDragon tools
+LIBDRAGON_DIR := ./libdragon
+TOOLS_DIR := $(LIBDRAGON_DIR)/tools
+CHKSUM64 := $(TOOLS_DIR)/chksum64
+MKDFS := $(TOOLS_DIR)/mkdfs/mkdfs
+N64TOOL := $(TOOLS_DIR)/n64tool
 
-N64PREFIX = $(ROOTDIR)/mips64-elf/bin/mips64-elf-
-CC = $(N64PREFIX)gcc
-AS = $(N64PREFIX)as
-LD = $(N64PREFIX)ld
-OBJCOPY = $(N64PREFIX)objcopy
+# LibDragon artifacts
+LIBDRAGON_LIBS += $(LIBDRAGON_DIR)/libdragon.a
+LIBDRAGON_LIBS += $(LIBDRAGON_DIR)/libdragonsys.a
+ROM_HEADER := $(LIBDRAGON_DIR)/header
+
+# Toolchain binaries
+N64_CC := $(N64_GCC_PREFIX)gcc
+N64_AS := $(N64_GCC_PREFIX)as
+N64_LD := $(N64_GCC_PREFIX)ld
+N64_OBJCOPY := $(N64_GCC_PREFIX)objcopy
+
+# Compiler flags
+ASFLAGS = -march=vr4300 -mtune=vr4300
+CFLAGS += -MMD -MP # Generate dependency files during compilation
+CFLAGS += -march=vr4300 -mtune=vr4300 -std=gnu99 -G 0 -Ofast
+CFLAGS += -Wall -Wa,--fatal-warnings -fdiagnostics-color=always
+CFLAGS += -falign-functions=32 -ffunction-sections -fdata-sections
+CFLAGS += -I. -I.. -I../y3d -I"$(LIBDRAGON_DIR)/include" -I"$(N64_INCLUDE_DIR)"
+CFLAGS += -DN64 -D__N64__
+CFLAGS += -DSTBI_NO_HDR
+CFLAGS += -DSHOW_FPS
+CFLAGS += -DSHOW_SPLASH
+
+# Linker flags
+LDFLAGS += --library-path="$(LIBDRAGON_DIR)" --library-path="$(N64_LIB_DIR)"
+LDFLAGS += --library=dragon --library=c --library=m --library=dragonsys
+LDFLAGS += --script="./n64-exp.ld" --gc-sections
+LDFLAGS += -Map map.txt -nostdlib
+
+PROG_NAME = Yeti3D_Pro
 
 GAME_OBJS = \
 	../game/ai/boost.o \
@@ -73,29 +104,113 @@ YETI_OBJS =	\
 	../y3d/y3d_vertex.o \
 	../y3d/y3d_yeti.o
 
-PROG_NAME = Yeti3D_Pro
 OBJS = main.o stb_image.o $(GAME_OBJS) $(YETI_OBJS)
-LIBS = -lm -ldragon -lc -ldragonsys -lnosys
 
-$(PROG_NAME).z64: $(PROG_NAME).dfs $(PROG_NAME).elf
-	$(OBJCOPY) $(PROG_NAME).elf $(PROG_NAME).bin -O binary
-	rm -f $(PROG_NAME).v64
-	$(N64TOOL) -l 8192K -t "Yeti3D Pro" -h $(HEADER) -o $(PROG_NAME).z64 $(PROG_NAME).bin -s 4M $(PROG_NAME).dfs
-	$(CHKSUM64) $(PROG_NAME).z64
+all: toolchain libdragon libdragon-tools $(PROG_NAME).z64
+.PHONY: all 
 
-$(PROG_NAME).elf : $(OBJS)
-	$(LD) -o $(PROG_NAME).elf $(OBJS) $(LINK_FLAGS) $(LIBPATH) $(LIBS)
+$(PROG_NAME).z64: $(PROG_NAME).bin $(PROG_NAME).dfs
+$(PROG_NAME).z64: $(N64TOOL) $(CHKSUM64)
+	@echo "    [Z64] $@"
+	@rm -f "$@"
+	$(N64TOOL) -o "$@" \
+		--title "Yeti3D Pro" \
+		--header "$(ROM_HEADER)" \
+		"$(PROG_NAME).bin" \
+		--offset 4M "$(PROG_NAME).dfs"
+	$(CHKSUM64) "$@" $(REDIRECT_STDOUT)
 
-%.o: %.c
-	$(CC) $(CCFLAGS) $< -o $@
+$(PROG_NAME).bin: $(PROG_NAME).elf $(TOOLCHAIN_GUARD)
+	@echo "    [BIN] $(notdir $@)"
+	$(N64_OBJCOPY) -O binary "$<" "$@"
 
-%.o: %.s
-	$(AS) $(ASFLAGS) $< -o $@
+$(PROG_NAME).elf: $(OBJS) $(LIBDRAGON_LIBS)
+	@echo "    [LD]  $(notdir $@)"
+	$(N64_LD) -o "$@" $^ $(LDFLAGS)
 
-$(PROG_NAME).dfs :
-	$(MKDFS) $(PROG_NAME).dfs ./data/
+%.o: %.c $(TOOLCHAIN_GUARD)
+	@echo "    [CC]  $<"
+	$(N64_CC) -c $(CFLAGS) -o "$@" "$<"
 
-all: $(PROG_NAME).z64
+%.o: %.s $(TOOLCHAIN_GUARD)
+	@echo "    [AS]  $<"
+	$(N64_AS) $(ASFLAGS) -o "$@" "$<"
+
+$(PROG_NAME).dfs: $(MKDFS)
+	@echo "    [DFS] $(notdir $@)"
+	$(MKDFS) "$@" ./data/ $(REDIRECT_STDOUT)
 
 clean:
 	rm -f *.o ../game/*.o ../game/ai/*.o ../y3d/*.o *.z64 *.elf *.bin *.dfs
+.PHONY: clean
+
+distclean: clean toolchain-clean
+	rm -Rf "$(LIBDRAGON_DIR)" .guard-*
+	git restore "$(LIBDRAGON_DIR)"
+.PHONY: distclean
+
+#
+# LibDragon submodule
+#
+
+$(LIBDRAGON_LIBS): | libdragon ;
+
+$(CHKSUM64) $(MKDFS) $(N64TOOL): | libdragon-tools ;
+
+libdragon: $(TOOLCHAIN_GUARD) | gitmodules
+	@echo "    [DEP] $@"
+	$(MAKE) -C "$(LIBDRAGON_DIR)" libdragon \
+		V=$(V) N64_INST="$(N64_INST)" D=1 $(REDIRECT_STDOUT)
+.PHONY: libdragon
+
+libdragon-tools: | gitmodules
+	@echo "    [DEP] $@"
+	$(MAKE) -C "$(LIBDRAGON_DIR)" tools $(REDIRECT_STDOUT)
+.PHONY: libdragon-tools
+
+libdragon-clean:
+	$(MAKE) -C "$(LIBDRAGON_DIR)" clean tools-clean $(REDIRECT_STDOUT)
+.PHONY: libdragon-clean
+
+#
+# Compiler toolchain
+#
+
+ifdef TOOLCHAIN_GUARD
+# Track the toolchain installation with a guard file
+toolchain: $(TOOLCHAIN_GUARD)
+
+# Copy the toolchain script from libdragon and run it
+$(TOOLCHAIN_GUARD): | gitmodules
+	@mkdir -p "$(TOOLCHAIN_DIR)/tmp"
+	@echo "    [DEP] toolchain (this may take a while!)"
+	cp "$(TOOLS_DIR)/build-toolchain.sh" "$(TOOLCHAIN_DIR)/tmp"
+	export N64_INST="$(N64_INST)" && \
+		cd "$(TOOLCHAIN_DIR)/tmp" && \
+		bash build-toolchain.sh
+	rm -Rf "$(TOOLCHAIN_DIR)/tmp"
+	touch "$@"
+
+toolchain-clean:
+	rm -Rf "$(TOOLCHAIN_DIR)"
+else
+# NO-OP: toolchain is managed externally from the project
+toolchain toolchain-clean: ;
+endif
+.PHONY: toolchain toolchain-clean
+
+ifeq ($(GITMODULES),1)
+# Update git submodules
+gitmodules:
+	@if git submodule status | egrep -q '^[-]|^[+]' ; then \
+		echo "    [GIT] submodules"; \
+		git submodule update --init $(REDIRECT_STDOUT); \
+		$(MAKE) libdragon-clean V=$(V) $(REDIRECT_STDOUT); \
+    fi
+else
+gitmodules: ;
+endif
+.PHONY: gitmodules
+
+# Include compiler-generated dependency files
+-include $(DEPS)

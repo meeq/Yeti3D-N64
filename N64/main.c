@@ -250,7 +250,7 @@ void splash(void)
             {
                 rdp_sync(SYNC_PIPE);
                 rdp_load_texture_stride(0, 0, MIRROR_DISABLED, ss, j*ss->hslices + k);
-                rdp_draw_sprite(0, xx, yy);
+                rdp_draw_sprite(0, xx, yy, MIRROR_DISABLED);
                 xx += 32;
             }
             yy += 16;
@@ -303,7 +303,7 @@ void splash(void)
             {
                 rdp_sync(SYNC_PIPE);
                 rdp_load_texture_stride(0, 0, MIRROR_DISABLED, ss, j*ss->hslices + k);
-                rdp_draw_sprite(0, xx, yy);
+                rdp_draw_sprite(0, xx, yy, MIRROR_DISABLED);
                 xx += 32;
             }
             yy += 16;
@@ -321,8 +321,8 @@ void splash(void)
 /* initialize console hardware */
 void init_n64(void)
 {
-    /* enable interrupts (on the CPU) */
-    init_interrupts();
+    // Initialize timer subsystem
+    timer_init();
 
     // Initialize display
     display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, ANTIALIAS_RESAMPLE);
@@ -339,9 +339,6 @@ void init_n64(void)
 
     // Initialize controllers
     controller_init();
-
-    // Initialize timer subsystem
-    timer_init();
 
     // Initialize rom filesystem
     if (dfs_init(0xB0401000) != DFS_ESUCCESS)

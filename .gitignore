@@ -1,0 +1,8 @@
+*.o
+*.d
+
+N64/*.dfs
+N64/*.bin
+N64/*.elf
+N64/map.txt
+N64/toolchain

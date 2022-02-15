@@ -1,0 +1,3 @@
+[submodule "N64/libdragon"]
+	path = N64/libdragon
+	url = https://github.com/DragonMinded/libdragon
